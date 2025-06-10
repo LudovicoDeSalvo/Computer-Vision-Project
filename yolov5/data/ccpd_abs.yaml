@@ -1,0 +1,5 @@
+names:
+- plate
+nc: 1
+train: /home/frazer/computer vision/Computer-Vision-Project/data/CCPD2019/images_train
+val: /home/frazer/computer vision/Computer-Vision-Project/data/CCPD2019/images_val

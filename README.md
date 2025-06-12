@@ -55,6 +55,13 @@ Alternatively, run in scripted mode with arguments:
 | `--subset`             | string    | Choose CCPD subset for inference. Options:<br>`ccpd_base`, `ccpd_blur`, `ccpd_challenge`, `ccpd_db`, `ccpd_fn`, `ccpd_np`, `ccpd_rotate`, `ccpd_tilt`, `ccpd_weather`. |
 | `--crop_dir`           | path      | Manually specify a directory of 48×144 cropped plates (overrides default). |
 
+## System
+
+All testing has been done on a local machine equipped with:
+- 32GB RAM
+- RTX 4070 12GB VRAM
+
+
 ## References
 
 [Reference Paper](https://www.mdpi.com/1424-8220/24/9/2791)

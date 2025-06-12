@@ -174,7 +174,12 @@ def step_train_model(model_choice: Literal["baseline","pdlpr"], args):
     """Invoke the appropriate training script for the selected model."""
     if model_choice == "pdlpr":
         # train via the pdlpr module
-        cmd = [sys.executable, "-m", "pdlpr.train", "--data_root", str(CROPS_ROOT) + "/ccpd_base_crops"]
+        cmd = [
+            sys.executable, "-m", "pdlpr.train",
+            "--data_root", str(CROPS_ROOT) + "/ccpd_base_crops",
+            "--train_root", str(CROPS_ROOT) + "/ccpd_base_crops",
+            "--val_root",   str(CROPS_ROOT) + "/ccpd_base_val_crops"
+        ]
         env = os.environ.copy()
         run_step(cmd, cwd=REPO_ROOT, env=env)
     else:
@@ -190,7 +195,7 @@ def step_train_model(model_choice: Literal["baseline","pdlpr"], args):
 def choose_subset() -> str:
     """Interactively pick a CCPD subset suffix for inference."""
     options = [
-        "ccpd_base", "ccpd_blur", "ccpd_challenge", "ccpd_db", "ccpd_fn",
+        "ccpd_base_val", "ccpd_blur", "ccpd_challenge", "ccpd_db", "ccpd_fn",
         "ccpd_np", "ccpd_rotate", "ccpd_tilt", "ccpd_weather"
     ]
     print("Select sub-dataset for inference:")

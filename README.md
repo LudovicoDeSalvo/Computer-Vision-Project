@@ -54,15 +54,16 @@ Alternatively, run in scripted mode with arguments:
 | `--model`              | string    | Select recognition model: `baseline` or `pdlpr`. Required for non-interactive mode. |
 | `--subset`             | string    | Choose CCPD subset for inference. Options:<br>`ccpd_base`, `ccpd_blur`, `ccpd_challenge`, `ccpd_db`, `ccpd_fn`, `ccpd_np`, `ccpd_rotate`, `ccpd_tilt`, `ccpd_weather`. |
 | `--crop_dir`           | path      | Manually specify a directory of 48×144 cropped plates (overrides default). |
-| `--skip_infer`         | flag      | Skip the final inference step. Useful if you only want preprocessing/training. |
 
 ## References
 
 [Reference Paper](https://www.mdpi.com/1424-8220/24/9/2791)
+
 A Real-Time License Plate Detection and Recognition Model in Unconstrained Scenarios 
 -Lingbing Tao, Shunhe Hong, Yongxing Lin, Yangbing Chen, Pingan He, Zhixin Tie 
 
 [CCPD2019 Dataset](https://github.com/detectRecog/CCPD)
+
 Xu et al., 2018. ECCV
 
 [YOLOv5](https://github.com/ultralytics/yolov5)

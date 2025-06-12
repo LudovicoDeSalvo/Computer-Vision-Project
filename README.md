@@ -12,20 +12,20 @@ This repository implements a complete pipeline for license plate detection and r
 ├── baseline/   # Optional CNN+LSTM+CTC baseline model
 │ ├── model.py  
 │ ├── train.py  
-│ ├── eval.py   
+│ └── eval.py   
 ├── data/
-│ └── CCPD2019/         # Raw CCPD images
+│ ├── CCPD2019/         # Raw CCPD images
 │ └── CCPD2019_crops/   # YOLO-based plate crops (48x144)
 ├── pdlpr/
 │ ├── model.py 
 │ ├── train.py 
-│ ├── eval.py 
+│ └── eval.py 
 ├── utils/
 │ ├── crop_all.py                      # Calls crop.py for each sub-dataset
 │ ├── crop.py                          # Crops plates from images using YOLO labels
-│ ├── generate_yolo_labels.py          
-│ ├── train_yolo.py                 
-│ └── base_splitter.py                 # Divedes the ccpd_base into train and validaiton (90%-10%)
+│ ├── generate_yolo_labels.py          # Uses Yolo
+│ ├── train_yolo.py                    # Calls Yolo Trainer
+│ └── base_splitter.py                 # Divides the ccpd_base into train and validaiton (90%-10%)
 └── yolov5/             # YOLOv5 repo (cloned)
 ```
 

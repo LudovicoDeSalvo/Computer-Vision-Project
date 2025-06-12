@@ -7,6 +7,7 @@ This repository implements a complete pipeline for license plate detection and r
 
 ## Project Structure
 
+```
 ├── main.py     # Full interactive pipeline: from raw data to final inference
 ├── baseline/   # Optional CNN+LSTM+CTC baseline model
 │ ├── model.py  
@@ -26,8 +27,9 @@ This repository implements a complete pipeline for license plate detection and r
 │ ├── train_yolo.py                 
 │ └── base_splitter.py                 # Divedes the ccpd_base into train and validaiton (90%-10%)
 └── yolov5/             # YOLOv5 repo (cloned)
+```
 
-## ▶️ How to Use `main.py`
+## How to Use `main.py`
 
 Run the full pipeline interactively, **recommended**:
 
@@ -54,17 +56,13 @@ Alternatively, run in scripted mode with arguments:
 | `--crop_dir`           | path      | Manually specify a directory of 48×144 cropped plates (overrides default). |
 | `--skip_infer`         | flag      | Skip the final inference step. Useful if you only want preprocessing/training. |
 
+## References
 
-##  References
+[Reference Paper](https://www.mdpi.com/1424-8220/24/9/2791)
+A Real-Time License Plate Detection and Recognition Model in Unconstrained Scenarios 
+-Lingbing Tao, Shunhe Hong, Yongxing Lin, Yangbing Chen, Pingan He, Zhixin Tie 
 
-    PDLPR Paper
-    Lingbing Tao et al., 2024
-    A Real-Time License Plate Detection and Recognition Model in Unconstrained Scenarios
-    DOI:10.3390/s24092791
+[CCPD2019 Dataset](https://github.com/detectRecog/CCPD)
+Xu et al., 2018. ECCV
 
-    CCPD2019 Dataset
-    Xu et al., 2018. ECCV
-    https://github.com/detectRecog/CCPD
-
-    YOLOv5
-    https://github.com/ultralytics/yolov5
+[YOLOv5](https://github.com/ultralytics/yolov5)

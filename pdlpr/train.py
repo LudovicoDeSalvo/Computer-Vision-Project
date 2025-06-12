@@ -197,6 +197,32 @@ def evaluate(model: nn.Module, loader: DataLoader, tokenizer: Tokenizer, device:
     model.train()
     return correct / total if total else 0.0
 
+@torch.no_grad()
+def eval_free_decode(model: nn.Module,
+                     loader: DataLoader,
+                     tokenizer: Tokenizer,
+                     device: torch.device) -> tuple[float,float]:
+    model.eval()
+    plate_ok = char_ok = char_total = 0
+    eos, pad = tokenizer.eos_id, tokenizer.pad_id
+
+    for imgs, tgt in loader:          # tgt still has <sos>…<eos>
+        imgs = imgs.to(device, non_blocking=True)
+        pred = model.inference(imgs, tokenizer.sos_id, eos, device)
+
+        for p_ids, t_ids in zip(pred, tgt[:,1:]):  # strip <SOS> in target
+            gt  = tokenizer.decode(t_ids.tolist())
+            pr  = tokenizer.decode(p_ids.tolist())
+            plate_ok += int(pr == gt)
+            char_ok  += sum(a == b for a, b in zip(pr, gt))
+            char_total += max(len(pr), len(gt))
+
+    plate_acc = plate_ok / len(loader.dataset)
+    char_acc  = char_ok  / char_total
+    model.train()
+    return plate_acc, char_acc
+
+
 # ----------------------------------------
 # Scheduler helper
 # ----------------------------------------
@@ -336,17 +362,18 @@ def train(args):
                 print(f"Epoch {epoch+1}/{args.epochs} ┃ Step {step:05d}/{len(train_loader)} ┃ Loss {loss.item():.4f} ┃ LR {lr:.6e}")
 
         avg_loss = epoch_loss / len(train_loader)
-        val_acc = evaluate(model, val_loader, tokenizer, device)
-        print(f"Epoch {epoch+1}: avg_loss={avg_loss:.4f}, val_acc={val_acc*100:.2f}%")
+        plate_acc, char_acc = eval_free_decode(model, val_loader, tokenizer, device)
+        print(f"Epoch {epoch+1}: loss={avg_loss:.7f} │ plate={plate_acc*100:.4f}% │ char={char_acc*100:.4f}%")
+
 
         # Early stopping check
-        is_best = val_acc > best_acc
+        is_best = plate_acc > best_acc
         if is_best:
-            best_acc = val_acc
+            best_acc = plate_acc
             patience_counter = 0
         else:
             patience_counter += 1
-            print(f"⏳ No improvement for {patience_counter} epoch(s).")
+            print(f"⏳ No improvement. Patience: {patience_counter}/{patience}.")
             if patience_counter >= patience:
                 print(f"🛑 Early stopping triggered after {patience} epochs without improvement.")
                 break
@@ -367,7 +394,10 @@ def train(args):
                 },
                 ckpt_path,
             )
-            print(f"💾 Saved checkpoint: {ckpt_path.resolve().relative_to(Path.cwd().resolve())}")
+            if is_best:
+                print(f"✅ Saved best model: {ckpt_path.resolve().relative_to(Path.cwd().resolve())}")
+            else:
+                print(f"💾 Saved checkpoint: {ckpt_path.resolve().relative_to(Path.cwd().resolve())}")
 
 
 
@@ -398,7 +428,7 @@ def get_args():
     parser.add_argument("--save_every", type=int, default=5, help="Checkpoint every N epochs")
     parser.add_argument("--log_every", type=int, default=50, help="Step interval for logging")
     parser.add_argument("--cpu", action="store_true", help="Force CPU training")
-    parser.add_argument("--early_stop_patience", type=int, default=5, help="Number of epochs with no improvement to wait before stopping")
+    parser.add_argument("--early_stop_patience", type=int, default=15, help="Number of epochs with no improvement to wait before stopping")
 
     return parser.parse_args()
 

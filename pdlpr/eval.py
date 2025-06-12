@@ -1,24 +1,3 @@
-#!/usr/bin/env python3
-"""eval.py — Evaluation / inference utility for the Parallel Decoding LPR network.
-
-Usage examples
---------------
-$ python -m pdlpr.eval \
-        --data_root /data/CCPD2019 \
-        --weights runs/PDLPR/best.ckpt \
-        --batch 256 --device cuda:0
-
-Outputs an evaluation table with **character‑level accuracy**, **plate‑level
-accuracy** and **mean decoding time** (FPS).
-
-If you already have YOLO detections saved as crops or their bounding box
-coordinates, point ``--crop_dir`` to the folder of 48×144 crops and run the same
-command — the script does not require raw CCPD file‑name parsing in that case.
-
-The implementation mirrors the training utilities so that results are
-reproducible with a single checkpoint and the original dataset.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -36,26 +15,19 @@ from torchvision import transforms
 from torchvision.io import read_image
 from PIL import Image
 
+from pdlpr.train import Tokenizer 
+
 
 # -----------------------------------------------------------------------------
 #  Character set (must match training)
 # -----------------------------------------------------------------------------
 
-CHINESE = (
-    "皖","沪","津","渝","冀","晋","蒙","辽","吉","黑","苏","浙","京","闽","赣","鲁","豫","鄂","湘","粤",
-    "桂","琼","川","贵","云","藏","陕","甘","青","宁","新","警","学","O",
-)
-LETTERS = tuple("ABCDEFGHJKLMNPQRSTUVWXYZO") 
-DIGITS = tuple("0123456789")
-
-# ----- CCPD index decoding helper (added automatically) ----------------
 _PROVINCES = [
-    "皖","沪","津","渝","冀","晋","蒙","辽","吉","黑","苏","浙","京","闽","赣","鲁",
+    "皖","沪","津","渝","冀","晋","辽","吉","黑","苏","浙","京","闽","赣","鲁",
     "豫","鄂","湘","粤","桂","琼","川","贵","云","藏","陕","甘","青","宁","新",
-    "警","学","O",
 ]
-_ALPHABETS = list("ABCDEFGHJKLMNPQRSTUVWXYZO")   # include O
-_ADS       = _ALPHABETS + list("0123456789") + ["O"]
+_ALPHABETS = list("ABCDEFGHJKLMNPQRSTUVWXYZ")
+_ADS = _ALPHABETS + list("0123456789") + ["O"]
 
 def _decode_plate(indices: str) -> str | None:
     """Convert CCPD index string like '0_0_22_27_27_33_16' → '皖A04025'."""
@@ -73,16 +45,6 @@ def _decode_plate(indices: str) -> str | None:
         return None
 # ----------------------------------------------------------------------
 
-SOS_TOKEN = "<SOS>"
-EOS_TOKEN = "<EOS>"
-PAD_TOKEN = "<PAD>"
-
-VOCAB = [PAD_TOKEN, SOS_TOKEN, EOS_TOKEN] + list(CHINESE + LETTERS + DIGITS)
-VOCAB_DICT = {ch: i for i, ch in enumerate(VOCAB)}
-
-PAD_ID = VOCAB_DICT[PAD_TOKEN]
-SOS_ID = VOCAB_DICT[SOS_TOKEN]
-EOS_ID = VOCAB_DICT[EOS_TOKEN]
 
 
 # -----------------------------------------------------------------------------
@@ -92,9 +54,10 @@ EOS_ID = VOCAB_DICT[EOS_TOKEN]
 
 
 class CCPDPlateDataset(Dataset):
-    def __init__(self, root: str | pathlib.Path, height: int = 48, width: int = 144):
+    def __init__(self, root: str | pathlib.Path, tokenizer: Tokenizer, height: int = 48, width: int = 144):
         self.root = pathlib.Path(root)
         self.height, self.width = height, width
+        self.tokenizer = tokenizer
 
         self.imgs = sorted(
             [p for p in self.root.rglob("*.jpg") if p.is_file() or p.suffix.lower() in {".jpg", ".png"}],
@@ -115,13 +78,12 @@ class CCPDPlateDataset(Dataset):
 
     def __getitem__(self, idx):
         p = self.imgs[idx]
-        # load and preprocess
         pil = Image.open(p).convert("RGB")
-        img = self.tf(pil)   # Resize → ToTensor → Normalize
+        img = self.tf(pil)
 
         # extract and encode the plate string
         label = self._extract_plate_from_filename(p)
-        encoded = self.encode(label)
+        encoded = self.tokenizer.encode(label)[1:-1]
 
         return img, encoded, p.name
 
@@ -142,41 +104,23 @@ class CCPDPlateDataset(Dataset):
             except (IndexError, ValueError):
                 pass
         return name
-    
-    @staticmethod
-    def encode(text: str) -> List[int]:
-        """Convert a plate string into a list of vocab indices."""
-        return [VOCAB_DICT[c] for c in text if c in VOCAB_DICT]
-
-    @staticmethod
-    def decode(ids: List[int]) -> str:
-        """Raw decoding (for debug) — does not skip special tokens."""
-        return "".join(VOCAB[i] for i in ids if i < len(VOCAB))
-
-    @staticmethod
-    def decode_filtered(ids: List[int]) -> str:
-        """Filtered decoding — used for accuracy computation."""
-        chars = []
-        for i in ids:
-            if i == EOS_ID:
-                break
-            if i in (PAD_ID, SOS_ID):
-                continue
-            chars.append(VOCAB[i])
-        return "".join(chars)
 
 
 # -----------------------------------------------------------------------------
 #  Collate / batching
 # -----------------------------------------------------------------------------
 
-def collate_fn(batch):
+def collate_fn(batch, pad_id: int):
     imgs, labels, names = zip(*batch)
     imgs = torch.stack(imgs, dim=0)
+
+    # Convert labels (which are lists of ints) to tensors before padding
+    labels = [torch.tensor(l, dtype=torch.long) for l in labels]
+
     max_len = max(len(l) for l in labels)
-    padded = torch.full((len(labels), max_len), PAD_ID, dtype=torch.long)
+    padded = torch.full((len(labels), max_len), pad_id, dtype=torch.long)
     for i, l in enumerate(labels):
-        padded[i, : len(l)] = torch.tensor(l, dtype=torch.long)
+        padded[i, : len(l)] = l
     return imgs, padded, names
 
 
@@ -188,7 +132,7 @@ def collate_fn(batch):
 # your evaluate function
 
 @torch.no_grad()
-def evaluate(model: torch.nn.Module, loader: DataLoader, device: str | torch.device):
+def evaluate(model: torch.nn.Module, loader: DataLoader, tokenizer: Tokenizer, device: str | torch.device):
     model.eval()
     t_start = time.time()
     plate_correct = 0
@@ -197,26 +141,19 @@ def evaluate(model: torch.nn.Module, loader: DataLoader, device: str | torch.dev
 
     for imgs, labels, names in tqdm(loader, desc="Eval", unit="batch"):
         imgs = imgs.to(device, non_blocking=True)
+        # Use the tokenizer for special IDs
         pred_ids = model.inference(
             imgs,
-            sos_id=SOS_ID,
-            eos_id=EOS_ID,
+            sos_id=tokenizer.sos_id,
+            eos_id=tokenizer.eos_id,
             device=device
         )
 
-        # debug sanity check once
-        if plate_correct == 0 and char_total == 0:
-            print("\n🔍 Sanity check:")
-            for name, gt_ids, pred in list(zip(names, labels, pred_ids))[:5]:
-                raw_gt   = CCPDPlateDataset.decode(gt_ids)
-                raw_pred = CCPDPlateDataset.decode(pred.tolist())
-                print(f"{name:<25} | GT: {raw_gt} | PRED: {raw_pred}")
-            print()
-
         # compute accuracy
         for gt_ids, pred in zip(labels, pred_ids):
-            gt_text   = CCPDPlateDataset.decode_filtered(gt_ids)
-            pred_text = CCPDPlateDataset.decode_filtered(pred.tolist())
+            # Use the tokenizer to decode
+            gt_text   = tokenizer.decode(gt_ids.tolist())
+            pred_text = tokenizer.decode(pred.tolist())
             plate_correct += int(pred_text == gt_text)
             char_correct  += sum(p == g for p, g in zip(pred_text, gt_text))
             char_total    += max(len(pred_text), len(gt_text))
@@ -249,15 +186,31 @@ def main():
     args = parse_args()
     device = torch.device(args.device)
 
-    # Load dataset
-    ds = CCPDPlateDataset(args.data_root)
-    dl = DataLoader(ds, batch_size=args.batch, shuffle=False, num_workers=args.num_workers, pin_memory=True, collate_fn=collate_fn)
-
     # Load model
     from pdlpr.model import PDLPR
-
-    model = PDLPR(num_classes=len(VOCAB))
     ckpt = torch.load(args.weights, map_location="cpu")
+
+    if "tokenizer" not in ckpt:
+        raise ValueError("The provided checkpoint is old and does not contain a tokenizer.")
+    
+    tokenizer = Tokenizer()
+    tokenizer.__dict__.update(ckpt["tokenizer"])
+    print(f"✔️  Loaded tokenizer (vocab size: {tokenizer.vocab_size})")
+
+    # Load dataset, passing the tokenizer
+    ds = CCPDPlateDataset(args.data_root, tokenizer=tokenizer)
+    
+    # Use a lambda to pass the correct pad_id to the collate function
+    dl = DataLoader(
+        ds, 
+        batch_size=args.batch, 
+        shuffle=False, 
+        num_workers=args.num_workers, 
+        pin_memory=True, 
+        collate_fn=lambda batch: collate_fn(batch, tokenizer.pad_id) # ❗ Use lambda here
+    )
+    
+    model = PDLPR(num_classes=tokenizer.vocab_size) # 🔄 Use loaded vocab size
 
     # Extract the actual state dict (your train.py writes it under "model")
     if "model_state" in ckpt:
@@ -278,7 +231,7 @@ def main():
 
     model.to(device)
 
-    plate_acc, char_acc, fps = evaluate(model, dl, device)
+    plate_acc, char_acc, fps = evaluate(model, dl, tokenizer, device) # 🔄 Pass it here
 
     print("\nEvaluation results")
     print("------------------")

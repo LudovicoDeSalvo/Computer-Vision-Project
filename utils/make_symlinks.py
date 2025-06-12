@@ -18,7 +18,7 @@ for split in subsets:
             img_src  = os.path.join(root, folder, name)                  # .jpg
             lbl_src  = os.path.join(root, folder + "_labels", name.replace(".jpg", ".txt"))
             if os.path.exists(img_src) and os.path.exists(lbl_src):
-                # link simbolico (su Windows usa shutil.copy2 se i link non funzionano)
+                # link simbolico 
                 pathlib.Path(os.path.join(split_dir,  name)).symlink_to(os.path.relpath(img_src , split_dir))
                 pathlib.Path(os.path.join(lbl_dir,   name.replace(".jpg", ".txt"))).symlink_to(
                     os.path.relpath(lbl_src, lbl_dir))

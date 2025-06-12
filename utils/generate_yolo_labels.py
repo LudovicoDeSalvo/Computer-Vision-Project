@@ -1,56 +1,66 @@
 import os
-from PIL import Image
+import subprocess
+import shutil
 
-def parse_filename_to_bbox(filename, img_w, img_h):
-    try:
-        # Esempio nome: 01-86_91-298&341_449&414-458&394_308&410_304&357_454&341-...
-        coords = filename.split("-")[2]
-        top_left, bottom_right = coords.split("_")
-        x1, y1 = map(int, top_left.split("&"))
-        x2, y2 = map(int, bottom_right.split("&"))
+# --- CONFIGURATION ---
+detect_script = "yolov5/detect.py"
+weights = "yolov5/runs/train/ccpd-yolov5s_fast15/weights/best.pt"
+img_size = 640
+conf_thres = 0.25
+project_dir = "runs/detect"  # where YOLO puts its output by default
 
-        # Calcola bbox normalizzata
-        x_center = ((x1 + x2) / 2) / img_w
-        y_center = ((y1 + y2) / 2) / img_h
-        width = abs(x2 - x1) / img_w
-        height = abs(y2 - y1) / img_h
+# --- MANUAL list of folders ---
+folders = [
+    "data/CCPD2019/ccpd_base",
+    "data/CCPD2019/ccpd_base_val",
+    "data/CCPD2019/ccpd_blur",
+    "data/CCPD2019/ccpd_challenge",
+    "data/CCPD2019/ccpd_db",
+    "data/CCPD2019/ccpd_np",
+    "data/CCPD2019/ccpd_fn",
+    "data/CCPD2019/ccpd_rotate",
+    "data/CCPD2019/ccpd_tilt",
+    "data/CCPD2019/ccpd_weather",
+]
 
-        return [0, x_center, y_center, width, height]
-    except Exception as e:
-        print(f"Errore parsing {filename}: {e}")
-        return None
+# --- Run detection and move labels ---
+for folder in folders:
+    if not os.path.isdir(folder):
+        print(f"⚠️ Skipping (not a directory): {folder}")
+        continue
 
-def generate_labels(image_dir, label_dir):
-    if not os.path.exists(label_dir):
-        os.makedirs(label_dir)
+    name = os.path.basename(os.path.normpath(folder))
+    print(f"🔍 Detecting in: {folder}")
 
-    for fname in os.listdir(image_dir):
-        if not fname.endswith(".jpg") or "-" not in fname:
-            continue
-
-        fpath = os.path.join(image_dir, fname)
-        try:
-            with Image.open(fpath) as img:
-                w, h = img.size
-                bbox = parse_filename_to_bbox(fname, w, h)
-                if bbox:
-                    label_path = os.path.join(label_dir, fname.replace(".jpg", ".txt"))
-                    with open(label_path, "w") as f:
-                        f.write(" ".join([str(round(x, 6)) for x in bbox]) + "\n")
-        except Exception as e:
-            print(f"Errore file {fname}: {e}")
-
-
-if __name__ == "__main__":
-    base_root = "data/CCPD2019"
-    subfolders = [
-        "ccpd_base", "ccpd_blur", "ccpd_challenge", "ccpd_db",
-        "ccpd_fn", "ccpd_np", "ccpd_rotate", "ccpd_tilt", "ccpd_weather"
+    # 1. Run detect.py
+    cmd = [
+        "python", detect_script,
+        "--weights", weights,
+        "--source", folder,
+        "--img", str(img_size),
+        "--conf", str(conf_thres),
+        "--project", project_dir,
+        "--name", name,
+        "--exist-ok",
+        "--save-txt",  # <- important: tells YOLO to save labels
+        "--nosave"
     ]
+    subprocess.run(cmd)
 
-    for sf in subfolders:
-        img_dir = os.path.join(base_root, sf)
-        lbl_dir = os.path.join(base_root, sf + "_labels")
-        print(f"🔄  Genero label per {sf} …")
-        generate_labels(img_dir, lbl_dir)
+    # 2. Move labels to the desired output
+    label_src = os.path.join(project_dir, name, "labels")
+    label_dst = f"{folder}_labels"
 
+    if os.path.exists(label_src):
+        os.makedirs(label_dst, exist_ok=True)
+        for f in os.listdir(label_dst):
+            os.remove(os.path.join(label_dst, f))
+
+        for file in os.listdir(label_src):
+            shutil.move(os.path.join(label_src, file), os.path.join(label_dst, file))
+
+        print(f"✅ Moved labels to: {label_dst}")
+    else:
+        print(f"⚠️ No labels found in {label_src} — detection may have failed.")
+
+print("🏁 All folders processed.")

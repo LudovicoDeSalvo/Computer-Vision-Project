@@ -1,2 +1,8 @@
 /CCPD2019
 /data/CCPD2019
+/pdlpr/__pycache__
+/yolov5/runs/predict
+/data/CCPD2019_crops
+/yolov5/__pycache__
+/yolov5/models/__pycache__
+/yolov5/utils/__pycache__

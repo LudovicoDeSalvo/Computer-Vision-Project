@@ -15,7 +15,9 @@ from torchvision import transforms
 from torchvision.io import read_image
 from PIL import Image
 
-from pdlpr.train import Tokenizer 
+from pdlpr.train import Tokenizer
+
+import itertools
 
 
 # -----------------------------------------------------------------------------
@@ -129,41 +131,49 @@ def collate_fn(batch, pad_id: int):
 #  Metric helpers
 # -----------------------------------------------------------------------------
 
-# your evaluate function
-
 @torch.no_grad()
 def evaluate(model: torch.nn.Module, loader: DataLoader, tokenizer: Tokenizer, device: str | torch.device):
+    """Evaluates model performance using CTC greedy decoding."""
     model.eval()
     t_start = time.time()
     plate_correct = 0
     char_correct = 0
     char_total = 0
+    blank_id = tokenizer.pad_id  # In your setup, PAD is the blank token
 
     for imgs, labels, names in tqdm(loader, desc="Eval", unit="batch"):
         imgs = imgs.to(device, non_blocking=True)
-        # Use the tokenizer for special IDs
-        pred_ids = model.inference(
-            imgs,
-            sos_id=tokenizer.sos_id,
-            eos_id=tokenizer.eos_id,
-            device=device
-        )
+        
+        # Get logits from the CTC head, which is the part of the model we trained
+        logits_t_b_v = model.forward_ctc(imgs)
+        pred_indices = logits_t_b_v.argmax(dim=-1).T  # Transpose to (B, T)
 
-        # compute accuracy
-        for gt_ids, pred in zip(labels, pred_ids):
-            # Use the tokenizer to decode
-            gt_text   = tokenizer.decode(gt_ids.tolist())
-            pred_text = tokenizer.decode(pred.tolist())
-            plate_correct += int(pred_text == gt_text)
-            char_correct  += sum(p == g for p, g in zip(pred_text, gt_text))
-            char_total    += max(len(pred_text), len(gt_text))
+        # Decode each prediction in the batch
+        for i in range(pred_indices.size(0)):
+            # 1. CTC Greedy Decode: Collapse repeats
+            pred_collapsed = [k for k, _ in itertools.groupby(pred_indices[i].tolist())]
+            
+            # 2. Remove blank tokens
+            pred_decoded_ids = [p for p in pred_collapsed if p != blank_id]
+            
+            # 3. Convert to string
+            predicted_plate = tokenizer.decode(pred_decoded_ids, strip_special=False)
+            
+            # Get ground truth text (already encoded without SOS/EOS in this dataset)
+            gt_ids = labels[i]
+            ground_truth_plate = tokenizer.decode(gt_ids.tolist())
+
+            # Compare and calculate accuracy
+            if predicted_plate == ground_truth_plate:
+                plate_correct += 1
+            char_correct += sum(a == b for a, b in zip(predicted_plate, ground_truth_plate))
+            char_total += max(len(predicted_plate), len(ground_truth_plate))
 
     duration = time.time() - t_start
     fps = len(loader.dataset) / duration
     plate_acc = plate_correct / len(loader.dataset) * 100
-    char_acc  = char_correct / char_total * 100
+    char_acc = (char_correct / char_total * 100) if char_total > 0 else 0
     return plate_acc, char_acc, fps
-
 
 
 # -----------------------------------------------------------------------------
@@ -209,7 +219,7 @@ def main():
         pin_memory=True, 
         collate_fn=lambda batch: collate_fn(batch, tokenizer.pad_id) # ❗ Use lambda here
     )
-    
+
     model = PDLPR(num_classes=tokenizer.vocab_size) # 🔄 Use loaded vocab size
 
     # Extract the actual state dict (your train.py writes it under "model")

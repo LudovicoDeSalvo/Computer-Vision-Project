@@ -192,12 +192,7 @@ def subsequent_mask(size: int) -> torch.Tensor:
 # -----------------------------
 
 class PDLPR(nn.Module):
-    """PDLPR – Parallel Decoder License Plate Recognition network.
-
-    Args:
-        num_classes: vocabulary size (including <sos>/<eos>/<pad> if you use them).
-        max_len: maximum target sequence length (without <sos>, with <eos>). Default 18 works for Chinese 7‑char + EOS.
-    """
+    """PDLPR – Parallel Decoder License Plate Recognition network."""
 
     def __init__(
         self,
@@ -226,7 +221,8 @@ class PDLPR(nn.Module):
             [DecoderBlock(d_model, nhead, dim_ff) for _ in range(num_decoder_layers)]
         )
 
-        self.classifier = nn.Linear(d_model, num_classes)
+        self.classifier = nn.Linear(d_model, num_classes) 
+        self.ctc_head   = nn.Linear(d_model, num_classes)   
         self.max_len = max_len
         self.num_classes = num_classes
 
@@ -263,6 +259,12 @@ class PDLPR(nn.Module):
 
         logits = self.classifier(tgt)  # B L num_classes
         return logits
+    
+    def forward_ctc(self, images: torch.Tensor) -> torch.Tensor:
+        """Run backbone+encoder and project to vocab logits for CTC."""
+        memory = self.encode(images)                  # B, N(=T), C
+        logits  = self.ctc_head(memory)               # B, N, V
+        return logits.permute(1, 0, 2)                # T, B, V  (time major)
 
     # ---------------------------------------------------------------------
     @torch.no_grad()

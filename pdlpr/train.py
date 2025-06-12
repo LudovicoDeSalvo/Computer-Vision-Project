@@ -11,8 +11,10 @@ from typing import List, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision.transforms as T
+import torchvision.transforms as transforms
 from PIL import Image
+from torch.nn import CTCLoss
+from tqdm import tqdm
 
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader, Dataset, random_split
@@ -99,7 +101,7 @@ class CCPDDataset(Dataset):
 
     IMG_EXTS = {".jpg", ".png", ".jpeg", ".bmp"}
 
-    def __init__(self, root: str | Path, tokenizer: Tokenizer, transform: T.Compose | None = None):
+    def __init__(self, root: str | Path, tokenizer: Tokenizer, transform: transforms.Compose | None = None):
         self.root = Path(root)
         self.transform = transform
         self.tokenizer = tokenizer
@@ -143,7 +145,7 @@ class CCPDDataset(Dataset):
         if self.transform:
             img = self.transform(img)
         else:
-            img = T.ToTensor()(img)
+            img = transforms.ToTensor()(img)
         return img, torch.tensor(token_ids, dtype=torch.long)
 
 # ----------------------------------------
@@ -223,6 +225,51 @@ def eval_free_decode(model: nn.Module,
     return plate_acc, char_acc
 
 
+# ➕ ADD THIS NEW FUNCTION to train.py
+
+@torch.no_grad()
+def eval_ctc_decode(model: nn.Module,
+                    loader: DataLoader,
+                    tokenizer: Tokenizer,
+                    device: torch.device) -> tuple[float, float]:
+    """Evaluates model performance using CTC greedy decoding."""
+    model.eval()
+    plate_ok = char_ok = char_total = 0
+    blank_id = tokenizer.pad_id # In your setup, PAD is the blank token
+
+    for imgs, targets in loader:
+        imgs = imgs.to(device, non_blocking=True)
+        
+        # Get logits in (T, B, V) format from the CTC head
+        logits_t_b_v = model.forward_ctc(imgs) #
+        pred_indices = logits_t_b_v.argmax(dim=-1).T  # Transpose to (B, T)
+
+        # Decode each prediction in the batch
+        for i in range(pred_indices.size(0)):
+            # 1. Greedy decode and remove repeats
+            pred_collapsed = [k for k, _ in itertools.groupby(pred_indices[i].tolist())]
+            
+            # 2. Remove blank tokens
+            pred_decoded_ids = [p for p in pred_collapsed if p != blank_id]
+            
+            # 3. Convert to string
+            predicted_plate = tokenizer.decode(pred_decoded_ids, strip_special=False)
+            
+            # Get ground truth text (strip SOS/EOS)
+            gt_ids = targets[i][1:-1]
+            ground_truth_plate = tokenizer.decode(gt_ids.tolist())
+
+            # Compare and calculate accuracy
+            if predicted_plate == ground_truth_plate:
+                plate_ok += 1
+            char_ok += sum(a == b for a, b in zip(predicted_plate, ground_truth_plate))
+            char_total += max(len(predicted_plate), len(ground_truth_plate))
+
+    plate_acc = plate_ok / len(loader.dataset) if len(loader.dataset) > 0 else 0
+    char_acc = char_ok / char_total if char_total > 0 else 0
+    model.train()
+    return plate_acc, char_acc
+
 # ----------------------------------------
 # Scheduler helper
 # ----------------------------------------
@@ -241,6 +288,7 @@ def build_scheduler(optimizer: torch.optim.Optimizer, num_warmup_steps: int, num
 # ----------------------------------------
 
 def train(args):
+    # Device setup
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
     print(f"Using device: {device}")
 
@@ -248,35 +296,29 @@ def train(args):
     tokenizer = Tokenizer()
     print(f"Vocab size: {tokenizer.vocab_size}")
 
-    # 2. Data pipeline
-    train_tfms = T.Compose([
-        T.Resize((48, 144)),
-        T.ColorJitter(0.4, 0.4, 0.4, 0.1),
-        T.RandomAffine(degrees=4, translate=(0.02, 0.06),
-                       scale=(0.9, 1.1), shear=4, fill=0),
-        T.ToTensor(),
-        T.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
+    # 2. Data transforms
+    train_tfms = transforms.Compose([
+        transforms.Resize((48, 144)),
+        transforms.ColorJitter(0.4, 0.4, 0.4, 0.1),
+        transforms.RandomAffine(degrees=4, translate=(0.02, 0.06), scale=(0.9, 1.1), shear=4, fill=0),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
+    ])
+    val_tfms = transforms.Compose([
+        transforms.Resize((48, 144)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
     ])
 
-    val_tfms = T.Compose([
-        T.Resize((48, 144)),
-        T.ToTensor(),
-        T.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
-    ])
-
-    # If user passed explicit train/val roots, use those folders directly.
+    # 3. Dataset & loaders
     if args.train_root and args.val_root:
-        print(f"▶️  Using explicit train set: {args.train_root}")
-        print(f"▶️  Using explicit val   set: {args.val_root}")
         train_ds = CCPDDataset(args.train_root, tokenizer, transform=train_tfms)
-        val_ds   = CCPDDataset(args.val_root,   tokenizer, transform=val_tfms)
+        val_ds = CCPDDataset(args.val_root, tokenizer, transform=val_tfms)
     else:
-        # old behavior: random split from single data_root
         full_ds = CCPDDataset(args.data_root, tokenizer, transform=train_tfms)
         val_size = int(len(full_ds) * args.val_split)
         train_size = len(full_ds) - val_size
         train_ds, val_ds = random_split(full_ds, [train_size, val_size])
-        # override val split transforms
         val_ds.dataset.transform = val_tfms  # type: ignore[attr-defined]
 
     train_loader = DataLoader(
@@ -296,13 +338,12 @@ def train(args):
         collate_fn=lambda b: collate_fn(b, tokenizer.pad_id),
     )
 
-    # 3. Model
+    # 4. Model initialization
     from pdlpr.model import PDLPR
-
     model = PDLPR(num_classes=tokenizer.vocab_size)
     model.to(device)
 
-    # 4. Optimiser & scheduler
+    # 5. Optimizer & scheduler
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     total_steps = len(train_loader) * args.epochs
     warmup_steps = len(train_loader) * args.warmup_epochs
@@ -310,10 +351,10 @@ def train(args):
 
     scaler = GradScaler(enabled=args.amp and device.type == "cuda")
 
-    # 5. Criterion
-    criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_id)
+    # 6. Criterion: CTC Loss
+    criterion = nn.CTCLoss(blank=tokenizer.pad_id, zero_infinity=True)
 
-    # 6. Optionally resume
+    # 7. Resume checkpoint if any
     start_epoch = 0
     best_acc = 0.0
     if args.resume and Path(args.resume).is_file():
@@ -326,27 +367,35 @@ def train(args):
         best_acc = ckpt.get("best_acc", 0.0)
         print(f"✔️  Resumed from {args.resume} (epoch {start_epoch})")
 
-    # Initialize early stopping
-    patience = args.early_stop_patience
-    patience_counter = 0
+    # Early stopping setup
+    patience, patience_counter = args.early_stop_patience, 0
 
-    # 7. Training loop
+    # 8. Training loop
+
+    
     for epoch in range(start_epoch, args.epochs):
         model.train()
-        epoch_loss = 0.0
-        for step, (imgs, targets) in enumerate(train_loader):
+        running_loss = 0.0
+
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}", unit="batch")
+
+        for step, (imgs, targets) in enumerate(pbar):
             imgs = imgs.to(device, non_blocking=True)
             targets = targets.to(device, non_blocking=True)
 
             optimizer.zero_grad(set_to_none=True)
 
-            # teacher forcing: shift
-            tgt_in = targets[:, :-1]
-            tgt_out = targets[:, 1:]
+            logits_t_b_v = model.forward_ctc(imgs)
+            targets_ctc = targets[:, 1:-1]
+
+            B = imgs.size(0)
+            T = logits_t_b_v.size(0)
+            input_lengths = torch.full((B,), T, dtype=torch.long, device=device)
+            target_lengths = (targets_ctc != tokenizer.pad_id).sum(dim=1)
 
             with autocast(enabled=scaler.is_enabled()):
-                logits = model(imgs, tgt_in)
-                loss = criterion(logits.reshape(-1, logits.size(-1)), tgt_out.reshape(-1))
+                log_probs = F.log_softmax(logits_t_b_v, dim=-1) 
+                loss = criterion(log_probs, targets_ctc, input_lengths, target_lengths) 
 
             scaler.scale(loss).backward()
             if args.clip_grad > 0:
@@ -356,17 +405,16 @@ def train(args):
             scaler.update()
             scheduler.step()
 
-            epoch_loss += loss.item()
-            if step % args.log_every == 0:
-                lr = scheduler.get_last_lr()[0]
-                print(f"Epoch {epoch+1}/{args.epochs} ┃ Step {step:05d}/{len(train_loader)} ┃ Loss {loss.item():.4f} ┃ LR {lr:.6e}")
-
-        avg_loss = epoch_loss / len(train_loader)
-        plate_acc, char_acc = eval_free_decode(model, val_loader, tokenizer, device)
-        print(f"Epoch {epoch+1}: loss={avg_loss:.7f} │ plate={plate_acc*100:.4f}% │ char={char_acc*100:.4f}%")
+            running_loss += loss.item()
+            pbar.set_postfix_str(f"loss={running_loss / (step + 1):.8f}")
 
 
-        # Early stopping check
+        avg_loss = running_loss / len(train_loader)
+        plate_acc, char_acc = eval_ctc_decode(model, val_loader, tokenizer, device)
+        print(f"Epoch {epoch+1:>2} ┃ Loss: {avg_loss:.8f} ┃ Plate Acc: {plate_acc*100:6.4f}% ┃ Char Acc: {char_acc*100:6.4f}%")
+
+
+        #Early Stopping
         is_best = plate_acc > best_acc
         if is_best:
             best_acc = plate_acc
@@ -378,28 +426,24 @@ def train(args):
                 print(f"🛑 Early stopping triggered after {patience} epochs without improvement.")
                 break
 
-        # Checkpoint
+        # Checkpointing
         if (epoch + 1) % args.save_every == 0 or is_best:
-            ckpt_path = Path(args.out_dir) / ("best.pt" if is_best else f"epoch{epoch+1}.pt")
+            ckpt_name = "best.pt" if is_best else f"epoch{epoch+1}.pt"
+            ckpt_path = Path(args.out_dir) / ckpt_name
             ckpt_path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "model": model.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "scheduler": scheduler.state_dict(),
-                    "scaler": scaler.state_dict(),
-                    "best_acc": best_acc,
-                    "tokenizer": tokenizer.__dict__,
-                },
-                ckpt_path,
-            )
+            torch.save({
+                "epoch": epoch,
+                "model": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict(),
+                "scaler": scaler.state_dict(),
+                "best_acc": best_acc,
+                "tokenizer": tokenizer.__dict__,
+            }, ckpt_path)
             if is_best:
                 print(f"✅ Saved best model: {ckpt_path.resolve().relative_to(Path.cwd().resolve())}")
             else:
                 print(f"💾 Saved checkpoint: {ckpt_path.resolve().relative_to(Path.cwd().resolve())}")
-
-
 
     print("🏁 Training finished!")
     print(f"Best validation accuracy: {best_acc*100:.2f}%")
@@ -413,9 +457,9 @@ def get_args():
     parser = argparse.ArgumentParser(description="Train PDLPR network on CCPD2019")
     parser.add_argument("--data_root", type=str, required=True, help="Path to CCPD dataset root")
     parser.add_argument("--out_dir", type=str, default="pdlpr", help="Directory to store checkpoints")
-    parser.add_argument("--epochs", type=int, default=50, help="Total number of epochs")
+    parser.add_argument("--epochs", type=int, default=500, help="Total number of epochs")
     parser.add_argument("--warmup_epochs", type=float, default=1.0, help="Warm‑up duration in epochs")
-    parser.add_argument("--batch_size", type=int, default=512)
+    parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-3, help="Initial learning rate")
     parser.add_argument("--clip_grad", type=float, default=1.0, help="Gradient clipping (0 = disabled)")
@@ -425,10 +469,9 @@ def get_args():
     parser.add_argument("--no_amp", dest="amp", action="store_false", help="Disable mixed-precision training")
     parser.set_defaults(amp=True)
     parser.add_argument("--resume", type=str, default="", help="Path to checkpoint to resume from")
-    parser.add_argument("--save_every", type=int, default=5, help="Checkpoint every N epochs")
-    parser.add_argument("--log_every", type=int, default=50, help="Step interval for logging")
+    parser.add_argument("--save_every", type=int, default=20, help="Checkpoint every N epochs")
     parser.add_argument("--cpu", action="store_true", help="Force CPU training")
-    parser.add_argument("--early_stop_patience", type=int, default=15, help="Number of epochs with no improvement to wait before stopping")
+    parser.add_argument("--early_stop_patience", type=int, default=25, help="Number of epochs with no improvement to wait before stopping")
 
     return parser.parse_args()
 

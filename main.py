@@ -26,7 +26,7 @@ CROP_ALL   = UTILS_DIR / "crop_all.py"
 CCPD_ROOT             = REPO_ROOT / "data" / "CCPD2019"
 CROPS_ROOT            = REPO_ROOT / "data" / "CCPD2019_crops"
 GINUZZO_CHECKPOINT    = REPO_ROOT / "pdlpr" / "best.pt"
-BASELINE_CHECKPOINT   = REPO_ROOT / "baseline" / "ocr_best.pt"
+BASELINE_CHECKPOINT   = REPO_ROOT / "baseline" / "ocr_model.pth"
 
 # ----------------------------------------------------------------------------
 #  Small helpers
@@ -123,8 +123,8 @@ def step_inference(model_choice: Literal["baseline", "pdlpr"], args):
             print("⚠️  Baseline checkpoint not found. Skipping baseline inference.")
             return
         cmd = [
-            "echo",
-            f"[baseline] will run inference on {data_dir} using {ckpt}"
+            sys.executable,
+            str(REPO_ROOT / "baseline" / "evaluate.py"),
         ]
         run_step(cmd)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 import argparse
+import pathlib
 import subprocess
 import sys
 import os
@@ -92,41 +93,66 @@ def choose_model() -> Literal["baseline", "pdlpr"]:
         print("Please enter 'b' for baseline or 'p' for PDLPR.")
 
 # Does inference
+# ───────────────────────── Inference wrapper ────────────────────────────
 def step_inference(model_choice: Literal["baseline", "pdlpr"], args):
+    """Run inference for either the pdlpr model or the baseline OCR-CTC."""
+    # 1) Determina la cartella da analizzare
     if args.crop_dir:
-        data_dir = args.crop_dir
+        data_dir = pathlib.Path(args.crop_dir)
     elif args.subset:
         data_dir = CROPS_ROOT / f"{args.subset}_crops"
     else:
         data_dir = CROPS_ROOT
-
     print(f"📂 Running inference on: {data_dir}")
 
+    # 2) PDLPR ───────────────────────────────────────────────────────────
     if model_choice == "pdlpr":
         ckpt = GINUZZO_CHECKPOINT
         if not ckpt.exists():
-            print("❌ Pdlpr checkpoint not found – aborting inference.")
+            print("❌ PDLPR checkpoint not found – aborting inference.")
             return
-        print(f"🔍 PDLPR Inference Check:\n  → data_root: {data_dir}\n  → weights:   {ckpt}")
+        print(f"🔍 PDLPR Inference Check:"
+              f"\n  → data_root: {data_dir}"
+              f"\n  → weights:   {ckpt}")
+
         cmd = [
-            sys.executable,
-            "-m", "pdlpr.eval",
-            "--data_root", str(data_dir),
-            "--weights", str(ckpt),
+            sys.executable, "-m", "pdlpr.eval",
+            "--data_root",  str(data_dir),
+            "--weights",    str(ckpt),
         ]
         env = os.environ.copy()
         env["PYTHONPATH"] = str(REPO_ROOT)
         run_step(cmd, cwd=REPO_ROOT, env=env)
+
+    # 3) BASELINE OCR-CTC ────────────────────────────────────────────────
     else:
         ckpt = BASELINE_CHECKPOINT
-        if not ckpt.exists():
-            print("⚠️  Baseline checkpoint not found. Skipping baseline inference.")
-            return
-        cmd = [
-            sys.executable,
-            str(REPO_ROOT / "baseline" / "evaluate.py"),
-        ]
-        run_step(cmd)
+    if not ckpt.exists():
+        print("⚠️  baseline checkpoint not found – aborting inference.")
+        return
+
+    print(f"🔍 Baseline Inference Check:"
+          f"\n  → data_root: {data_dir}"
+          f"\n  → weights:   {ckpt}")
+
+    evaluate_py = REPO_ROOT / "baseline" / "evaluate.py"
+    if not evaluate_py.exists():
+        print("⚠️  baseline/evaluate.py non trovato – impossibile eseguire l'inferenza.")
+        return
+
+    # usa getattr: se il flag --batch non esiste prende 64
+    batch_sz = getattr(args, "batch", 64)
+
+    cmd = [
+        sys.executable, str(evaluate_py),
+        "--data_root", str(data_dir),
+        "--weights",   str(ckpt),
+        "--batch",     str(batch_sz),
+    ]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(REPO_ROOT)
+    run_step(cmd, cwd=REPO_ROOT, env=env)
+
 
 # Downloads the dataset
 def step_download_dataset():
@@ -169,27 +195,35 @@ def step_split_base(args):
     cmd = [sys.executable, str(splitter)]
     run_step(cmd)
 
-# Calls the respective trainers
-def step_train_model(model_choice: Literal["baseline","pdlpr"], args):
+def step_train_model(model_choice: Literal["baseline", "pdlpr"], args):
     """Invoke the appropriate training script for the selected model."""
+    # ------------------------------------------------------------------ PDLPR
     if model_choice == "pdlpr":
-        # train via the pdlpr module
         cmd = [
             sys.executable, "-m", "pdlpr.train",
-            "--data_root", str(CROPS_ROOT) + "/ccpd_base_crops",
-            "--train_root", str(CROPS_ROOT) + "/ccpd_base_crops",
-            "--val_root",   str(CROPS_ROOT) + "/ccpd_base_val_crops"
+            "--data_root",  str(CROPS_ROOT / "ccpd_base_crops"),
+            "--train_root", str(CROPS_ROOT / "ccpd_base_crops"),
+            "--val_root",   str(CROPS_ROOT / "ccpd_base_val_crops"),
         ]
         env = os.environ.copy()
         run_step(cmd, cwd=REPO_ROOT, env=env)
+
+    # ---------------------------------------------------------------- BASELINE
     else:
-        # assume a baseline/train.py exists
         baseline_train = REPO_ROOT / "baseline" / "train.py"
         if not baseline_train.exists():
-            print("⚠️  Baseline train.py not found, skipping baseline training.")
+            print("⚠️  baseline/train.py non trovato → skip")
             return
-        cmd = [sys.executable, str(baseline_train), "--data_root", str(CROPS_ROOT) + "/ccpd_base_crops"]
-        run_step(cmd)
+
+        cmd = [
+            sys.executable, str(baseline_train),
+            "--data_root",  str(CROPS_ROOT / "ccpd_base_crops"),
+            "--train_root", str(CROPS_ROOT / "ccpd_base_crops"),
+            "--val_root",   str(CROPS_ROOT / "ccpd_base_val_crops"),
+        ]
+        env = os.environ.copy()
+        run_step(cmd, cwd=REPO_ROOT, env=env)
+
 
 # Handles the sub-datasets
 def choose_subset() -> str:
@@ -282,4 +316,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main() 
+

@@ -1,112 +1,152 @@
-import os
-import pathlib
-from PIL import Image
-import torch
+# evaluate.py – SOLO inference CTC (nessun training)
+# --------------------------------------------------------------------------------
+"""Inferisce un modello OCR‑CTC già addestrato su un sotto‑dataset di
+crop CCPD e calcola la similarità Levenshtein pred↔GT.
+
+Lo script è pensato per essere richiamato da *main.py* con:
+
+    python baseline/evaluate.py \
+        --data_root  <cartella_crop> \
+        --weights    baseline/ocr_model.pth \
+        --batch      64
+"""
+
+from __future__ import annotations
+import argparse, pathlib, re, torch, pandas as pd
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
-import torch.nn as nn
-import torch.optim as optim
-import pandas as pd
+from PIL import Image
 from tqdm import tqdm
 from difflib import SequenceMatcher
 
-# === CONFIG ===
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-DATA_DIR = ROOT / "data" / "CCPD2019" / "images"
-LABEL_DIR = ROOT / "data" / "CCPD2019" / "labels"
-MODEL_PATH = ROOT / "baseline" / "ocr_model.pth"
-OUTPUT_CSV = ROOT / "ctc_predictions.csv"
-CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-CHAR2IDX = {c: i + 1 for i, c in enumerate(CHARS)}  # 0 is reserved for CTC blank
-IDX2CHAR = {i + 1: c for i, c in enumerate(CHARS)}
+from model import OCRModel  # stessa architettura usata al training
 
-# === DATASET ===
-class PlateDataset(Dataset):
-    def __init__(self, img_dir, lbl_dir, transform=None):
-        self.img_dir = pathlib.Path(img_dir)
-        self.lbl_dir = pathlib.Path(lbl_dir)
-        self.images = list(self.img_dir.glob("*.jpg"))
-        self.transform = transform
+# ─────────────────── TOKENIZER CCPD (identico a train.py) ───────────────────────
+_PROVINCES = [
+    "皖","沪","津","渝","冀","晋","辽","吉","黑","苏","浙","京","闽","赣","鲁",
+    "豫","鄂","湘","粤","桂","琼","川","贵","云","藏","陕","甘","青","宁","新",
+]
+_ALPHABETS = list("ABCDEFGHJKLMNPQRSTUVWXYZ")
+_ADS       = _ALPHABETS + list("0123456789") + ["O"]
+
+CTC_CHARS  = _PROVINCES + _ALPHABETS + list("0123456789")      # senza padding (blank=0)
+IDX2CHAR   = {i+1: c for i, c in enumerate(CTC_CHARS)}           # 1‑based → char
+
+# ---------------------------------------------------------------------------
+# GT util
+# ---------------------------------------------------------------------------
+
+def _decode_plate(idx_str: str) -> str | None:
+    """"0_0_22_27_27_33_16" → "皖A04025" (None se parsing fallisce)."""
+    try:
+        seq = [int(x) for x in idx_str.split("_")]
+        if len(seq) != 7:
+            return None
+        return (_PROVINCES[seq[0]] + _ALPHABETS[seq[1]] +
+                "".join(_ADS[i] for i in seq[2:]).replace("O", ""))
+    except (ValueError, IndexError):
+        return None
+
+# pattern: qualunque segmento con 6 "_" consecutivi e solo cifre → indice CCPD
+IDX_RE = re.compile(r"(?:^|-)((?:\d+_){6}\d+)(?:-|$)")
+
+def plate_from_filename(stem: str) -> str:
+    """Estrae la targa GT dal nome *crop* (ritorna stringa vuota se fallisce)."""
+    m = IDX_RE.search(stem)
+    if m:
+        p = _decode_plate(m.group(1))
+        if p:
+            return p
+    return ""
+
+lev = lambda a, b: SequenceMatcher(None, a, b).ratio()
+
+# ---------------------------------------------------------------------------
+# Dataset
+# ---------------------------------------------------------------------------
+class CropDS(Dataset):
+    def __init__(self, folder: pathlib.Path, tfm):
+        self.paths = sorted(folder.glob("*.jpg"))
+        self.tfm   = tfm
 
     def __len__(self):
-        return len(self.images)
+        return len(self.paths)
 
     def __getitem__(self, idx):
-        img_path = self.images[idx]
-        lbl_path = self.lbl_dir / (img_path.stem + ".txt")
+        p   = self.paths[idx]
+        img = Image.open(p).convert("RGB")
+        return self.tfm(img), plate_from_filename(p.stem), p.name
 
-        img = Image.open(img_path).convert("RGB")
-        if self.transform:
-            img = self.transform(img)
+# ---------------------------------------------------------------------------
+# Greedy decode (per singola sequenza logit T×C)
+# ---------------------------------------------------------------------------
 
-        with open(lbl_path) as f:
-            label_str = f.read().strip()
-        label = [CHAR2IDX[c] for c in label_str if c in CHAR2IDX]
-        return img, torch.tensor(label, dtype=torch.long)
+def ctc_decode(seq: torch.Tensor | torch.Tensor) -> str:
+    """`seq` shape (T, C). Ritorna stringa decodificata greedy‑CTC."""
+    idxs = seq.argmax(1).cpu().numpy()  # (T,)
+    out, prev = [], -1
+    for v in idxs:
+        if v != prev and v != 0:
+            out.append(IDX2CHAR.get(int(v), "?"))
+        prev = v
+    return "".join(out)
 
-# === MODEL ===
-class OCRModel(nn.Module):
-    def __init__(self, num_classes):
-        super().__init__()
-        self.cnn = nn.Sequential(
-            nn.Conv2d(3, 64, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
-            nn.Conv2d(64, 128, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2)
-        )
-        self.rnn = nn.GRU(128 * 8, 128, num_layers=2, bidirectional=True, batch_first=True)
-        self.fc = nn.Linear(256, num_classes + 1)  # CTC requires +1 for blank
+# ---------------------------------------------------------------------------
+# CLI & main
+# ---------------------------------------------------------------------------
 
-    def forward(self, x):
-        x = self.cnn(x)
-        b, c, h, w = x.size()
-        x = x.permute(0, 3, 1, 2).contiguous().view(b, w, -1)
-        x, _ = self.rnn(x)
-        x = self.fc(x)
-        return x
+def parse_args():
+    ap = argparse.ArgumentParser("OCR‑CTC evaluation")
+    ap.add_argument("--data_root", required=True, type=pathlib.Path,
+                    help="Cartella con crop .jpg")
+    ap.add_argument("--weights",   required=True, type=pathlib.Path,
+                    help="Checkpoint .pth da valutare")
+    ap.add_argument("--batch", type=int, default=64, help="Batch size (inference)")
+    return ap.parse_args()
 
-# === GREEDY DECODING ===
-def greedy_decode(logits):
-    pred = logits.argmax(dim=2).detach().cpu().numpy()  # (T, B)
-    pred = pred[:, 0] if pred.ndim == 2 else pred  # ensure shape (T,)
-    prev = -1
-    decoded = []
-    for p in pred:
-        if p != prev and p != 0:
-            decoded.append(IDX2CHAR.get(int(p), '?'))
-        prev = p
-    return "".join(decoded)
 
-# === EVALUATION ===
-def evaluate():
-    transform = transforms.Compose([
+def main():
+    args = parse_args()
+    if not args.data_root.exists():
+        raise FileNotFoundError(args.data_root)
+    if not args.weights.exists():
+        raise FileNotFoundError(args.weights)
+
+    tfm = transforms.Compose([
         transforms.Resize((32, 128)),
         transforms.ToTensor()
     ])
+    dl = DataLoader(CropDS(args.data_root, tfm),
+                    batch_size=args.batch, shuffle=False, num_workers=2)
 
-    print("\n🚀 Avvio valutazione OCR CTC...")
-    dataset = PlateDataset(DATA_DIR / "val", LABEL_DIR / "val", transform=transform)
-    loader = DataLoader(dataset, batch_size=1, shuffle=False)
+    model = OCRModel(len(CTC_CHARS)).cuda().eval()
+    model.load_state_dict(torch.load(args.weights, map_location="cuda"))
 
-    model = OCRModel(len(CHARS)).cuda()
-    model.load_state_dict(torch.load(MODEL_PATH))
-    model.eval()
-
-    results = []
-
+    rows, tot_sim = [], 0.0
+    pbar = tqdm(dl, total=len(dl), desc="Val set")
     with torch.no_grad():
-        for idx, (img, label) in enumerate(tqdm(loader, desc="🔍 Elaborazione immagini")):
-            img = img.cuda()
-            output = model(img)  # (B, T, C)
-            output = output.log_softmax(2).permute(1, 0, 2)  # (T, B, C)
-            pred_str = greedy_decode(output)
-            target_str = "".join([IDX2CHAR.get(i.item(), '?') for i in label[0]])
-            sim = SequenceMatcher(None, pred_str, target_str).ratio()
-            results.append({"index": idx, "prediction": pred_str, "target": target_str, "levenshtein": sim})
+        for imgs, gts, fnames in pbar:
+            logits = model(imgs.cuda()).log_softmax(2)            # B,W,C
+            logits = logits.permute(1, 0, 2)                      # T,B,C
+            B = imgs.size(0)
+            for b in range(B):
+                pred_str = ctc_decode(logits[:, b, :])
+                gt_str   = gts[b]
+                sim      = lev(pred_str, gt_str)
+                tot_sim += sim
+                rows.append({"file": fnames[b], "pred": pred_str,
+                              "gt": gt_str, "lev": sim})
+        pbar.close()
 
-    df = pd.DataFrame(results)
-    df.to_csv(OUTPUT_CSV, index=False)
-    print(f"\n✅ Risultati salvati in '{OUTPUT_CSV.name}'")
-    print("📈 Similarità media Levenshtein:", df["levenshtein"].mean())
+    out_csv = args.weights.parent / f"pred_{args.data_root.name}.csv"
+    pd.DataFrame(rows).to_csv(out_csv, index=False)
+    print(f"\n✅ CSV salvato → {out_csv.relative_to(pathlib.Path.cwd())} | "
+          f"Levenshtein medio = {tot_sim/len(rows):.3f}")
 
 if __name__ == "__main__":
-    evaluate()
+    main()
+
+
+
+
 

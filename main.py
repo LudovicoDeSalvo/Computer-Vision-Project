@@ -85,7 +85,7 @@ def step_crop_images(args):
 # model choice
 def choose_model() -> Literal["baseline", "pdlpr"]:
     while True:
-        choice = input("Choose model – [b]aseline or [p]dlpr: ").strip().lower()
+        choice = input("Choose model - [b]aseline or [p]dlpr: ").strip().lower()
         if choice in {"b", "baseline"}:
             return "baseline"
         if choice in {"p", "pdlpr"}:
@@ -109,7 +109,7 @@ def step_inference(model_choice: Literal["baseline", "pdlpr"], args):
     if model_choice == "pdlpr":
         ckpt = GINUZZO_CHECKPOINT
         if not ckpt.exists():
-            print("❌ PDLPR checkpoint not found – aborting inference.")
+            print("❌ PDLPR checkpoint not found - aborting inference.")
             return
         print(f"🔍 PDLPR Inference Check:"
               f"\n  → data_root: {data_dir}"
@@ -128,7 +128,7 @@ def step_inference(model_choice: Literal["baseline", "pdlpr"], args):
     else:
         ckpt = BASELINE_CHECKPOINT
     if not ckpt.exists():
-        print("⚠️  baseline checkpoint not found – aborting inference.")
+        print("⚠️  baseline checkpoint not found - aborting inference.")
         return
 
     print(f"🔍 Baseline Inference Check:"
@@ -137,7 +137,7 @@ def step_inference(model_choice: Literal["baseline", "pdlpr"], args):
 
     evaluate_py = REPO_ROOT / "baseline" / "evaluate.py"
     if not evaluate_py.exists():
-        print("⚠️  baseline/evaluate.py non trovato – impossibile eseguire l'inferenza.")
+        print("⚠️  baseline/evaluate.py non trovato - impossibile eseguire l'inferenza.")
         return
 
     # usa getattr: se il flag --batch non esiste prende 64
@@ -261,7 +261,7 @@ def parse_args():
         "ccpd_base", "ccpd_blur", "ccpd_challenge", "ccpd_db", "ccpd_fn",
         "ccpd_np", "ccpd_rotate", "ccpd_tilt", "ccpd_weather"
     ], help="Run inference on a specific CCPD subset (suffix)")
-    p.add_argument("--crop_dir", type=Path, help="Path to existing 48×144 crops (overrides default)")
+    p.add_argument("--crop_dir", type=Path, help="Path to existing 48x144 crops (overrides default)")
     p.add_argument("--download", action="store_true", help="Download and extract CCPD dataset")
 
     return p.parse_args()
@@ -288,7 +288,7 @@ def main():
         step_generate_labels(args)
 
     # 3. Crop plate images
-    if args.crop or (interactive and ask_yes_no("Crop plate images to 48×144?", default=False)):
+    if args.crop or (interactive and ask_yes_no("Crop plate images to 48x144?", default=False)):
         step_crop_images(args)
 
     # 4. Choose model

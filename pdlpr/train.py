@@ -19,7 +19,8 @@ from tqdm import tqdm
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader, Dataset, random_split
 
-# ----- CCPD index decoding helper (added automatically) ----------------
+# ------------ CCPD index  ----------------
+
 _PROVINCES = [
     "皖","沪","津","渝","冀","晋","辽","吉","黑","苏","浙","京","闽","赣","鲁",
     "豫","鄂","湘","粤","桂","琼","川","贵","云","藏","陕","甘","青","宁","新",
@@ -44,7 +45,7 @@ def _decode_plate(indices: str) -> str | None:
 
 
 # ----------------------------------------
-# Tokeniser / Vocabulary
+# Tokenizer
 # ----------------------------------------
 
 class Tokenizer:
@@ -112,7 +113,7 @@ class CCPDDataset(Dataset):
                 continue
             label = self._parse_label(p.name)
             if label is None:
-                continue  # ignore weird files
+                continue
             token_ids = self.tokenizer.encode(label)
             self.samples.append((p, token_ids))
 
@@ -167,65 +168,8 @@ def collate_fn(batch, pad_id: int):
     return imgs, padded
 
 # ----------------------------------------
-#  Training utils
+#  Loss Function
 # ----------------------------------------
-
-@torch.no_grad()
-def evaluate(model: nn.Module, loader: DataLoader, tokenizer: Tokenizer, device: torch.device) -> float:
-    model.eval()
-    correct = 0
-    total = 0
-    for imgs, targets in loader:
-        imgs = imgs.to(device, non_blocking=True)
-        targets = targets.to(device, non_blocking=True)
-
-        # prepare shifted inputs/labels (teacher forcing)
-        tgt_in = targets[:, :-1]
-        tgt_out = targets[:, 1:]
-
-        logits = model(imgs, tgt_in)  # (B,L,V)
-        pred = logits.argmax(dim=-1)
-        # compare full sequence equality (excluding PAD)
-        for p, t in zip(pred, tgt_out):
-            # strip after EOS in target
-            eos_positions = (t == tokenizer.eos_id).nonzero(as_tuple=True)[0]
-            if len(eos_positions):
-                t_len = eos_positions[0].item() + 1  # include EOS
-            else:
-                t_len = len(t)
-            if torch.equal(p[:t_len], t[:t_len]):
-                correct += 1
-            total += 1
-    model.train()
-    return correct / total if total else 0.0
-
-@torch.no_grad()
-def eval_free_decode(model: nn.Module,
-                     loader: DataLoader,
-                     tokenizer: Tokenizer,
-                     device: torch.device) -> tuple[float,float]:
-    model.eval()
-    plate_ok = char_ok = char_total = 0
-    eos, pad = tokenizer.eos_id, tokenizer.pad_id
-
-    for imgs, tgt in loader:          # tgt still has <sos>…<eos>
-        imgs = imgs.to(device, non_blocking=True)
-        pred = model.inference(imgs, tokenizer.sos_id, eos, device)
-
-        for p_ids, t_ids in zip(pred, tgt[:,1:]):  # strip <SOS> in target
-            gt  = tokenizer.decode(t_ids.tolist())
-            pr  = tokenizer.decode(p_ids.tolist())
-            plate_ok += int(pr == gt)
-            char_ok  += sum(a == b for a, b in zip(pr, gt))
-            char_total += max(len(pr), len(gt))
-
-    plate_acc = plate_ok / len(loader.dataset)
-    char_acc  = char_ok  / char_total
-    model.train()
-    return plate_acc, char_acc
-
-
-# ➕ ADD THIS NEW FUNCTION to train.py
 
 @torch.no_grad()
 def eval_ctc_decode(model: nn.Module,
@@ -235,7 +179,7 @@ def eval_ctc_decode(model: nn.Module,
     """Evaluates model performance using CTC greedy decoding."""
     model.eval()
     plate_ok = char_ok = char_total = 0
-    blank_id = tokenizer.pad_id # In your setup, PAD is the blank token
+    blank_id = tokenizer.pad_id
 
     for imgs, targets in loader:
         imgs = imgs.to(device, non_blocking=True)
@@ -367,11 +311,8 @@ def train(args):
         best_acc = ckpt.get("best_acc", 0.0)
         print(f"✔️  Resumed from {args.resume} (epoch {start_epoch})")
 
-    # Early stopping setup
-    patience, patience_counter = args.early_stop_patience, 0
-
     # 8. Training loop
-
+    patience, patience_counter = args.early_stop_patience, 0
     
     for epoch in range(start_epoch, args.epochs):
         model.train()
@@ -457,7 +398,7 @@ def get_args():
     parser = argparse.ArgumentParser(description="Train PDLPR network on CCPD2019")
     parser.add_argument("--data_root", type=str, required=True, help="Path to CCPD dataset root")
     parser.add_argument("--out_dir", type=str, default="pdlpr", help="Directory to store checkpoints")
-    parser.add_argument("--epochs", type=int, default=500, help="Total number of epochs")
+    parser.add_argument("--epochs", type=int, default=10, help="Total number of epochs")
     parser.add_argument("--warmup_epochs", type=float, default=1.0, help="Warm‑up duration in epochs")
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--workers", type=int, default=8)
@@ -471,7 +412,7 @@ def get_args():
     parser.add_argument("--resume", type=str, default="", help="Path to checkpoint to resume from")
     parser.add_argument("--save_every", type=int, default=20, help="Checkpoint every N epochs")
     parser.add_argument("--cpu", action="store_true", help="Force CPU training")
-    parser.add_argument("--early_stop_patience", type=int, default=25, help="Number of epochs with no improvement to wait before stopping")
+    parser.add_argument("--early_stop_patience", type=int, default=5, help="Number of epochs with no improvement to wait before stopping")
 
     return parser.parse_args()
 

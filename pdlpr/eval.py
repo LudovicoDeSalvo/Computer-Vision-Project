@@ -45,7 +45,6 @@ def _decode_plate(indices: str) -> str | None:
         return pro + alp + tail
     except (ValueError, IndexError):
         return None
-# ----------------------------------------------------------------------
 
 
 
@@ -128,7 +127,7 @@ def collate_fn(batch, pad_id: int):
 
 
 # -----------------------------------------------------------------------------
-#  Metric helpers
+#  Evaluate
 # -----------------------------------------------------------------------------
 
 @torch.no_grad()
@@ -217,12 +216,12 @@ def main():
         shuffle=False, 
         num_workers=args.num_workers, 
         pin_memory=True, 
-        collate_fn=lambda batch: collate_fn(batch, tokenizer.pad_id) # ❗ Use lambda here
+        collate_fn=lambda batch: collate_fn(batch, tokenizer.pad_id) 
     )
 
-    model = PDLPR(num_classes=tokenizer.vocab_size) # 🔄 Use loaded vocab size
+    model = PDLPR(num_classes=tokenizer.vocab_size)
 
-    # Extract the actual state dict (your train.py writes it under "model")
+    # Extract the actual state dict
     if "model_state" in ckpt:
         state = ckpt["model_state"]
     elif "model" in ckpt:
@@ -241,7 +240,7 @@ def main():
 
     model.to(device)
 
-    plate_acc, char_acc, fps = evaluate(model, dl, tokenizer, device) # 🔄 Pass it here
+    plate_acc, char_acc, fps = evaluate(model, dl, tokenizer, device)
 
     print("\nEvaluation results")
     print("------------------")

@@ -1,0 +1,25 @@
+# Core libraries
+torch>=1.10
+torchvision>=0.11
+Pillow>=8.0
+tqdm>=4.0
+
+# Optional but recommended for AMP and distributed training
+# (adjust versions depending on your CUDA setup)
+# e.g., for CUDA 11.7 → torch==1.13.1+cu117
+# pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu117
+
+# Dataset downloading
+gdown>=4.4.0
+
+# Argument parsing, system utils (standard library)
+# argparse, os, sys, pathlib, subprocess, typing, math – no need to list
+
+# Optional utilities
+pyyaml>=6.0  # if you use yaml somewhere (seen in subprocess-related imports)
+
+# OpenCV (used in cropping utils)
+opencv-python-headless>=4.5
+
+# Ensure compatibility with PyTorch transforms
+numpy>=1.20

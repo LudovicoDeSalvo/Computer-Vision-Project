@@ -24,7 +24,7 @@ class ConvBNAct(nn.Module):
 
 
 class Focus(nn.Module):
-    """Focus structure from YOLOv5 – spatially slice then concatenate along channel dim."""
+    """Focus structure from YOLOv5 - spatially slice then concatenate along channel dim."""
 
     def __init__(self, in_channels: int, out_channels: int):
         super().__init__()
@@ -45,7 +45,7 @@ class Focus(nn.Module):
 
 
 class ResBlock(nn.Module):
-    """Two 3×3 ConvBNAct layers with residual connection."""
+    """Two 3x3 ConvBNAct layers with residual connection."""
 
     def __init__(self, channels: int):
         super().__init__()
@@ -57,7 +57,7 @@ class ResBlock(nn.Module):
 
 
 class ConvDownSample(nn.Module):
-    """Strided 3×3 conv (s=2) instead of pooling to keep more semantics."""
+    """Strided 3x3 conv (s=2) instead of pooling to keep more semantics."""
 
     def __init__(self, in_channels: int, out_channels: int):
         super().__init__()
@@ -72,22 +72,22 @@ class ConvDownSample(nn.Module):
 # -----------------------------
 
 class IGFE(nn.Module):
-    """Backbone that downsamples 48×144 input to a 6×18 feature map with 512 channels."""
+    """Backbone that downsamples 48x144 input to a 6x18 feature map with 512 channels."""
 
     def __init__(self, in_channels: int = 3, channels = (64, 128, 256, 512)):
         super().__init__()
-        self.focus = Focus(in_channels, channels[0])           # 24×72
+        self.focus = Focus(in_channels, channels[0])           # 24x72
 
-        self.down1 = ConvDownSample(channels[0], channels[1]) # 12×36
+        self.down1 = ConvDownSample(channels[0], channels[1]) # 12x36
         self.res1a = ResBlock(channels[1])
         self.res1b = ResBlock(channels[1])
 
-        self.down2 = ConvDownSample(channels[1], channels[2]) # 6×18
+        self.down2 = ConvDownSample(channels[1], channels[2]) # 6x18
         self.res2a = ResBlock(channels[2])
         self.res2b = ResBlock(channels[2])
 
-        # one more stage to hit 6×18 with 512 ch
-        self.down3 = ConvDownSample(channels[2], channels[3]) # 3×9
+        # one more stage to hit 6x18 with 512 ch
+        self.down3 = ConvDownSample(channels[2], channels[3]) # 3x9
         self.res3a = ResBlock(channels[3])
         self.res3b = ResBlock(channels[3])
 
@@ -118,11 +118,11 @@ class PositionalEncoding(nn.Module):
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)  # 1 × max_len × d_model
+        pe = pe.unsqueeze(0)  # 1 x max_len x d_model
         self.register_buffer("pe", pe, persistent=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Add positional encoding (x: B × N × d)."""
+        """Add positional encoding (x: B x N x d)."""
         return x + self.pe[:, : x.size(1)].clone().detach()
 
 
@@ -183,7 +183,7 @@ class DecoderBlock(nn.Module):
 # utility ---------------------------------------------------------------------
 
 def subsequent_mask(size: int) -> torch.Tensor:
-    """Mask out (set True) the upper‑triangular part to prevent attending to future positions."""
+    """Mask out (set True) the upper-triangular part to prevent attending to future positions."""
     return torch.triu(torch.ones(size, size, dtype=torch.bool), diagonal=1)
 
 
@@ -192,7 +192,7 @@ def subsequent_mask(size: int) -> torch.Tensor:
 # -----------------------------
 
 class PDLPR(nn.Module):
-    """PDLPR – Parallel Decoder License Plate Recognition network."""
+    """PDLPR - Parallel Decoder License Plate Recognition network."""
 
     def __init__(
         self,
@@ -209,7 +209,7 @@ class PDLPR(nn.Module):
         self.flatten = nn.Flatten(2)  # keep B & C, flatten (H, W)
 
         # Positional encodings
-        self.pos_enc = PositionalEncoding(d_model, max_len=108)  # 3 × 9 == 27 tokens; original paper uses 6×18=108
+        self.pos_enc = PositionalEncoding(d_model, max_len=108)  # 3 x 9 == 27 tokens; original paper uses 6x18=108
         self.pos_dec = PositionalEncoding(d_model, max_len=max_len + 1)
 
         # Transformer stacks
@@ -228,7 +228,7 @@ class PDLPR(nn.Module):
 
     # ---------------------------------------------------------------------
     def encode(self, x: torch.Tensor) -> torch.Tensor:
-        # backbone -> (B, 512, H=3, W=9)   (for 48×144 input)
+        # backbone -> (B, 512, H=3, W=9)   (for 48x144 input)
         feat = self.backbone(x)
         B, C, H, W = feat.shape
         feat = self.flatten(feat)  # B, C, H*W
@@ -243,10 +243,10 @@ class PDLPR(nn.Module):
         """Forward for training.
 
         Args:
-            images: B × 3 × 48 × 144 raw plate crops.
-            tgt_seq: B × L int64 tensor – **must include <sos> token at position 0**, but **not include <eos>**.
+            images: B x 3 x 48 x 144 raw plate crops.
+            tgt_seq: B x L int64 tensor - **must include <sos> token at position 0**, but **not include <eos>**.
         Returns:
-            logits: B × L × num_classes – unnormalized scores for CTC / Cross‑Entropy.
+            logits: B x L x num_classes - unnormalized scores for CTC / Cross-Entropy.
         """
         memory = self.encode(images)
 
@@ -282,34 +282,13 @@ class PDLPR(nn.Module):
             out = tgt
             for layer in self.dec_layers:
                 out = layer(out, memory, tgt_mask=mask)
-            logits = self.classifier(out[:, -1])  # last step logits, shape B × num_classes
+            logits = self.classifier(out[:, -1])  # last step logits, shape B x num_classes
             next_token = logits.argmax(-1, keepdim=True)  # greedy
             ys = torch.cat([ys, next_token], dim=1)
             if (next_token == eos_id).all():
                 break
 
         return ys[:, 1:]  # strip SOS token
-
-
-# -----------------------------
-#  Helper – vocabulary for Chinese plates
-# -----------------------------
-
-def default_alphabet():
-    """Returns the canonical CCPD alphabet (provinces+alphanumerics).
-    Includes PAD(0), SOS(1), EOS(2). You can modify as needed.
-    """
-    provinces = [
-        "皖","沪","津","渝","冀","晋","蒙","辽","吉","黑","苏","浙","京","闽","赣","鲁","豫","鄂","湘","粤",
-        "桂","琼","川","贵","云","藏","陕","甘","青","宁","新","警","学","O",
-    ]
-    # Numbers & letters without I / O
-    letters_digits = [
-        "0","1","2","3","4","5","6","7","8","9",
-        "A","B","C","D","E","F","G","H","J","K","L","M","N","P","Q","R","S","T","U","V","W","X","Y","Z","O",
-    ]
-    alphabet = ["<pad>", "<sos>", "<eos>"] + provinces + letters_digits
-    return alphabet
 
 
 __all__ = ["PDLPR"]

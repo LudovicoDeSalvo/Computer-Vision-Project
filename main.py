@@ -160,7 +160,7 @@ def step_download_dataset():
     dataset_dir = REPO_ROOT / "data"
     dataset_dir.mkdir(parents=True, exist_ok=True)
     archive_path = dataset_dir / "CCPD2019.tar.xz"
-    inner_tar_path = dataset_dir / "CCPD2019.tar"
+    # inner_tar_path = dataset_dir / "CCPD2019.tar" # This is the path we're verifying
 
     if (dataset_dir / "CCPD2019").exists():
         print("✔️ Dataset already exists, skipping download.")
@@ -171,20 +171,65 @@ def step_download_dataset():
     gdown.download(url, str(archive_path), quiet=False)
 
     print("📦 Extracting .tar.xz")
-    with tarfile.open(archive_path, "r:xz") as txz:
-        txz.extractall(dataset_dir)
+    try:
+        with tarfile.open(archive_path, "r:xz") as txz:
+            # Inspect contents before extracting to understand structure
+            print("Contents of CCPD2019.tar.xz:")
+            for member in txz.getmembers():
+                print(f"  - {member.name}")
+            txz.extractall(dataset_dir)
+        print(".tar.xz extraction complete.")
+    except tarfile.ReadError as e:
+        print(f"Error reading .tar.xz archive: {e}")
+        print("The downloaded file might be corrupted or incomplete.")
+        if archive_path.exists():
+            os.remove(archive_path) # Remove potentially corrupted file
+        return
+
+    # --- Crucial debugging step ---
+    # After extracting the .tar.xz, search for the .tar file
+    found_tar_path = None
+    for root, dirs, files in os.walk(dataset_dir):
+        for file in files:
+            if file == "CCPD2019.tar":
+                found_tar_path = Path(root) / file
+                break
+        if found_tar_path:
+            break
+
+    if found_tar_path:
+        print(f"✅ Found CCPD2019.tar at: {found_tar_path}")
+        inner_tar_path = found_tar_path # Update the path to the actual location
+    else:
+        print("❌ CCPD2019.tar was NOT found after .tar.xz extraction in the expected location or any subdirectory.")
+        print("Please check the contents of CCPD2019.tar.xz manually.")
+        if archive_path.exists():
+            os.remove(archive_path) # Clean up
+        return # Exit as the necessary file isn't there
 
     print("📦 Extracting nested .tar")
-    with tarfile.open(inner_tar_path, "r:") as tar:
-        tar.extractall(dataset_dir)
+    try:
+        with tarfile.open(inner_tar_path, "r:") as tar:
+            tar.extractall(dataset_dir) # Extract to dataset_dir for consistency
+        print("Nested .tar extraction complete.")
+    except FileNotFoundError:
+        print(f"Error: Nested .tar file not found at {inner_tar_path}. This should not happen after the search.")
+    except tarfile.ReadError as e:
+        print(f"Error reading nested .tar archive: {e}")
+        print("The extracted .tar file might be corrupted or incomplete.")
+        if inner_tar_path.exists():
+            os.remove(inner_tar_path) # Remove potentially corrupted file
+        return
+
 
     if archive_path.exists():
         os.remove(archive_path)
     if inner_tar_path.exists():
-        os.remove(inner_tar_path)
+        os.remove(inner_tar_path) # Remove the inner .tar after extraction
     print("🧹 Removed compressed archives.")
 
     print("✅ Dataset ready in", dataset_dir)
+
 
 # Calls the base sub-dataset splitter
 def step_split_base(args):

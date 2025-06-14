@@ -26,7 +26,7 @@ CROP_ALL   = UTILS_DIR / "crop_all.py"
 # Default data locations
 CCPD_ROOT             = REPO_ROOT / "data" / "CCPD2019"
 CROPS_ROOT            = REPO_ROOT / "data" / "CCPD2019_crops"
-GINUZZO_CHECKPOINT    = REPO_ROOT / "pdlpr" / "epoch180.pt"
+GINUZZO_CHECKPOINT    = REPO_ROOT / "pdlpr" / "best.pt"
 BASELINE_CHECKPOINT   = REPO_ROOT / "baseline" / "ocr_model.pth"
 
 # ----------------------------------------------------------------------------
@@ -58,14 +58,6 @@ def run_step(cmd: list[str], cwd: Path | None = None, env: dict[str, str] | None
 #  Pipeline steps
 # ----------------------------------------------------------------------------
 
-# Calls the yolo trainer
-def step_train_yolo(args):
-    if not TRAIN_YOLO.exists():
-        print("⚠️  train_yolo.py not found under utils/. Skipping.")
-        return
-    cmd = [sys.executable, str(TRAIN_YOLO), "--data_root", str(CCPD_ROOT)]
-    run_step(cmd)
-
 # Calls the yolo labels generator
 def step_generate_labels(args):
     if not GEN_LABELS.exists():
@@ -93,7 +85,6 @@ def choose_model() -> Literal["baseline", "pdlpr"]:
         print("Please enter 'b' for baseline or 'p' for PDLPR.")
 
 # Does inference
-# ───────────────────────── Inference wrapper ────────────────────────────
 def step_inference(model_choice: Literal["baseline", "pdlpr"], args):
     """Run inference for either the pdlpr model or the baseline OCR-CTC."""
     # 1) Determina la cartella da analizzare
@@ -154,81 +145,47 @@ def step_inference(model_choice: Literal["baseline", "pdlpr"], args):
         run_step(cmd, cwd=REPO_ROOT, env=env)
 
 
-# Downloads the dataset
 def step_download_dataset():
     GDRIVE_ID = "1pbHQFfrkHmHNe1qjDWEth3FfyJ9WHDDc"
     dataset_dir = REPO_ROOT / "data"
     dataset_dir.mkdir(parents=True, exist_ok=True)
     archive_path = dataset_dir / "CCPD2019.tar.xz"
-    # inner_tar_path = dataset_dir / "CCPD2019.tar" # This is the path we're verifying
+    final_dataset_path = dataset_dir / "CCPD2019"
 
-    if (dataset_dir / "CCPD2019").exists():
-        print("✔️ Dataset already exists, skipping download.")
+    if final_dataset_path.exists():
+        print("✔️ Dataset already exists, skipping download and extraction.")
         return
 
+    # --- Step 1: Download the dataset  ---
     print(f"⬇️ Downloading CCPD dataset from Google Drive into {archive_path}")
     url = f"https://drive.google.com/uc?id={GDRIVE_ID}"
     gdown.download(url, str(archive_path), quiet=False)
 
-    print("📦 Extracting .tar.xz")
+    if not archive_path.exists():
+        print(f"❌ Archive file not found at {archive_path}. Please download it first.")
+        return
+
+    # --- Step 2: Extract the .tar.xz archive ---
+    print(f"📦 Extracting {archive_path} to {dataset_dir}...")
     try:
         with tarfile.open(archive_path, "r:xz") as txz:
-            # Inspect contents before extracting to understand structure
-            print("Contents of CCPD2019.tar.xz:")
-            for member in txz.getmembers():
-                print(f"  - {member.name}")
-            txz.extractall(dataset_dir)
-        print(".tar.xz extraction complete.")
+            txz.extractall(path=dataset_dir)
+        print("✅ Extraction complete.")
     except tarfile.ReadError as e:
-        print(f"Error reading .tar.xz archive: {e}")
-        print("The downloaded file might be corrupted or incomplete.")
+        print(f"❌ Error reading the archive: {e}")
         if archive_path.exists():
-            os.remove(archive_path) # Remove potentially corrupted file
+            os.remove(archive_path) # Clean up corrupted file
+        return
+    except Exception as e:
+        print(f"An unexpected error occurred during extraction: {e}")
         return
 
-    # --- Crucial debugging step ---
-    # After extracting the .tar.xz, search for the .tar file
-    found_tar_path = None
-    for root, dirs, files in os.walk(dataset_dir):
-        for file in files:
-            if file == "CCPD2019.tar":
-                found_tar_path = Path(root) / file
-                break
-        if found_tar_path:
-            break
-
-    if found_tar_path:
-        print(f"✅ Found CCPD2019.tar at: {found_tar_path}")
-        inner_tar_path = found_tar_path # Update the path to the actual location
-    else:
-        print("❌ CCPD2019.tar was NOT found after .tar.xz extraction in the expected location or any subdirectory.")
-        print("Please check the contents of CCPD2019.tar.xz manually.")
-        if archive_path.exists():
-            os.remove(archive_path) # Clean up
-        return # Exit as the necessary file isn't there
-
-    print("📦 Extracting nested .tar")
-    try:
-        with tarfile.open(inner_tar_path, "r:") as tar:
-            tar.extractall(dataset_dir) # Extract to dataset_dir for consistency
-        print("Nested .tar extraction complete.")
-    except FileNotFoundError:
-        print(f"Error: Nested .tar file not found at {inner_tar_path}. This should not happen after the search.")
-    except tarfile.ReadError as e:
-        print(f"Error reading nested .tar archive: {e}")
-        print("The extracted .tar file might be corrupted or incomplete.")
-        if inner_tar_path.exists():
-            os.remove(inner_tar_path) # Remove potentially corrupted file
-        return
-
-
+    # --- Step 3: Clean up the archive file ---
     if archive_path.exists():
         os.remove(archive_path)
-    if inner_tar_path.exists():
-        os.remove(inner_tar_path) # Remove the inner .tar after extraction
-    print("🧹 Removed compressed archives.")
+        print(f"🧹 Removed archive file: {archive_path}")
 
-    print("✅ Dataset ready in", dataset_dir)
+    print(f"✅ Dataset is ready in {final_dataset_path}")
 
 
 # Calls the base sub-dataset splitter
@@ -237,8 +194,18 @@ def step_split_base(args):
     if not splitter.exists():
         print(f"⚠️  base_splitter.py not found under {UTILS_DIR}, skipping split.")
         return
+    
+    source_directory = CCPD_ROOT
+    validation_directory = CCPD_ROOT.parent / (CCPD_ROOT.name + "_base_val")
+
     print("Splitting base into train/val (10% validation)…")
-    cmd = [sys.executable, str(splitter)]
+    cmd = [
+        sys.executable,
+        str(splitter),
+        "--src_dir", str(source_directory),
+        "--val_dir", str(validation_directory),
+        "--val_ratio", "0.1" # You can also make this a script argument if needed
+    ]
     run_step(cmd)
 
 def step_train_model(model_choice: Literal["baseline", "pdlpr"], args):
@@ -324,10 +291,6 @@ def main():
     if args.download or (interactive and ask_yes_no("Download and extract CCPD dataset?", default=False)):
         step_download_dataset()
         step_split_base(args)
-
-    # 1. Train YOLO
-    if args.train or (interactive and ask_yes_no("Do you want to train YOLO? Model already present, not recommended ", default=False)):
-        step_train_yolo(args)
 
     # 2. Generate YOLO labels
     if args.gen_labels or (interactive and ask_yes_no("Generate YOLO labels?", default=False)):

@@ -1,6 +1,7 @@
 import random
 import shutil
 from pathlib import Path
+import argparse
 
 def split_dataset(
     src_dir: str | Path,
@@ -25,9 +26,16 @@ def split_dataset(
           f"from {src} → {dst}")
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Split image files from a source directory into a validation directory.")
+    parser.add_argument("--src_dir", type=Path, required=True, help="Directory containing the source images.")
+    parser.add_argument("--val_dir", type=Path, required=True, help="Directory where validation images will be moved.")
+    parser.add_argument("--val_ratio", type=float, default=0.1, help="Fraction of images to move to the validation set.")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
+    args = parser.parse_args()
+
     split_dataset(
-        src_dir="data/CCPD2019/ccpd_base",
-        val_dir="data/CCPD2019/ccpd_base_val",
-        val_ratio=0.1,
-        seed=42
+        src_dir=args.src_dir,
+        val_dir=args.val_dir,
+        val_ratio=args.val_ratio,
+        seed=args.seed
     )

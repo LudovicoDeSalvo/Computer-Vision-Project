@@ -398,7 +398,7 @@ def get_args():
     parser = argparse.ArgumentParser(description="Train PDLPR network on CCPD2019")
     parser.add_argument("--data_root", type=str, required=True, help="Path to CCPD dataset root")
     parser.add_argument("--out_dir", type=str, default="pdlpr", help="Directory to store checkpoints")
-    parser.add_argument("--epochs", type=int, default=10, help="Total number of epochs")
+    parser.add_argument("--epochs", type=int, default=1000, help="Total number of epochs")
     parser.add_argument("--warmup_epochs", type=float, default=1.0, help="Warm‑up duration in epochs")
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--workers", type=int, default=8)
@@ -412,7 +412,7 @@ def get_args():
     parser.add_argument("--resume", type=str, default="", help="Path to checkpoint to resume from")
     parser.add_argument("--save_every", type=int, default=20, help="Checkpoint every N epochs")
     parser.add_argument("--cpu", action="store_true", help="Force CPU training")
-    parser.add_argument("--early_stop_patience", type=int, default=5, help="Number of epochs with no improvement to wait before stopping")
+    parser.add_argument("--early_stop_patience", type=int, default=200, help="Number of epochs with no improvement to wait before stopping")
 
     return parser.parse_args()
 

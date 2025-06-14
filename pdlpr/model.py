@@ -74,7 +74,7 @@ class ConvDownSample(nn.Module):
 class IGFE(nn.Module):
     """Backbone that downsamples 48x144 input to a 6x18 feature map with 512 channels."""
 
-    def __init__(self, in_channels: int = 3, channels = (64, 128, 256, 512)):
+    def __init__(self, in_channels: int = 3, channels = (64, 128, 512)):
         super().__init__()
         self.focus = Focus(in_channels, channels[0])           # 24x72
 
@@ -86,10 +86,6 @@ class IGFE(nn.Module):
         self.res2a = ResBlock(channels[2])
         self.res2b = ResBlock(channels[2])
 
-        # one more stage to hit 6x18 with 512 ch
-        self.down3 = ConvDownSample(channels[2], channels[3]) # 3x9
-        self.res3a = ResBlock(channels[3])
-        self.res3b = ResBlock(channels[3])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.focus(x)
@@ -99,9 +95,7 @@ class IGFE(nn.Module):
         x = self.down2(x)
         x = self.res2a(x); x = self.res2b(x)
 
-        x = self.down3(x)
-        x = self.res3a(x); x = self.res3b(x)
-        return x  # B 512 3 9  (will be flattened later)
+        return x 
 
 
 # -----------------------------

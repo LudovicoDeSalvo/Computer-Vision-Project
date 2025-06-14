@@ -26,7 +26,7 @@ CROP_ALL   = UTILS_DIR / "crop_all.py"
 # Default data locations
 CCPD_ROOT             = REPO_ROOT / "data" / "CCPD2019"
 CROPS_ROOT            = REPO_ROOT / "data" / "CCPD2019_crops"
-GINUZZO_CHECKPOINT    = REPO_ROOT / "pdlpr" / "best.pt"
+GINUZZO_CHECKPOINT    = REPO_ROOT / "pdlpr" / "epoch180.pt"
 BASELINE_CHECKPOINT   = REPO_ROOT / "baseline" / "ocr_model.pth"
 
 # ----------------------------------------------------------------------------
@@ -124,39 +124,39 @@ def step_inference(model_choice: Literal["baseline", "pdlpr"], args):
         env["PYTHONPATH"] = str(REPO_ROOT)
         run_step(cmd, cwd=REPO_ROOT, env=env)
 
-    # 3) BASELINE OCR-CTC ────────────────────────────────────────────────
+    # 3) BASELINE ────────────────────────────────────────────────
     else:
         ckpt = BASELINE_CHECKPOINT
-    if not ckpt.exists():
-        print("⚠️  baseline checkpoint not found - aborting inference.")
-        return
+        if not ckpt.exists():
+            print("⚠️  baseline checkpoint not found - aborting inference.")
+            return
 
-    print(f"🔍 Baseline Inference Check:"
-          f"\n  → data_root: {data_dir}"
-          f"\n  → weights:   {ckpt}")
+        print(f"🔍 Baseline Inference Check:"
+            f"\n  → data_root: {data_dir}"
+            f"\n  → weights:   {ckpt}")
 
-    evaluate_py = REPO_ROOT / "baseline" / "evaluate.py"
-    if not evaluate_py.exists():
-        print("⚠️  baseline/evaluate.py non trovato - impossibile eseguire l'inferenza.")
-        return
+        evaluate_py = REPO_ROOT / "baseline" / "evaluate.py"
+        if not evaluate_py.exists():
+            print("⚠️  baseline/evaluate.py non trovato - impossibile eseguire l'inferenza.")
+            return
 
-    # usa getattr: se il flag --batch non esiste prende 64
-    batch_sz = getattr(args, "batch", 64)
+        # usa getattr: se il flag --batch non esiste prende 64
+        batch_sz = getattr(args, "batch", 64)
 
-    cmd = [
-        sys.executable, str(evaluate_py),
-        "--data_root", str(data_dir),
-        "--weights",   str(ckpt),
-        "--batch",     str(batch_sz),
-    ]
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT)
-    run_step(cmd, cwd=REPO_ROOT, env=env)
+        cmd = [
+            sys.executable, str(evaluate_py),
+            "--data_root", str(data_dir),
+            "--weights",   str(ckpt),
+            "--batch",     str(batch_sz),
+        ]
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(REPO_ROOT)
+        run_step(cmd, cwd=REPO_ROOT, env=env)
 
 
 # Downloads the dataset
 def step_download_dataset():
-    GDRIVE_ID = "1rdEsCUcIUaYOVRkx5IMTRNA7PcGMmSgc"
+    GDRIVE_ID = "1pbHQFfrkHmHNe1qjDWEth3FfyJ9WHDDc"
     dataset_dir = REPO_ROOT / "data"
     archive_path = dataset_dir / "CCPD2019.tar.xz"
     inner_tar_path = dataset_dir / "CCPD2019.tar"
@@ -280,7 +280,7 @@ def main():
         step_split_base(args)
 
     # 1. Train YOLO
-    if args.train or (interactive and ask_yes_no("Do you want to train YOLO?", default=False)):
+    if args.train or (interactive and ask_yes_no("Do you want to train YOLO? Model already present, not recommended ", default=False)):
         step_train_yolo(args)
 
     # 2. Generate YOLO labels

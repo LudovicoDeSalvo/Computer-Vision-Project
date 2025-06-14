@@ -158,6 +158,7 @@ def step_inference(model_choice: Literal["baseline", "pdlpr"], args):
 def step_download_dataset():
     GDRIVE_ID = "1pbHQFfrkHmHNe1qjDWEth3FfyJ9WHDDc"
     dataset_dir = REPO_ROOT / "data"
+    dataset_dir.mkdir(parents=True, exist_ok=True)
     archive_path = dataset_dir / "CCPD2019.tar.xz"
     inner_tar_path = dataset_dir / "CCPD2019.tar"
 

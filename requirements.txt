@@ -23,3 +23,6 @@ opencv-python-headless>=4.5
 
 # Ensure compatibility with PyTorch transforms
 numpy>=1.20
+
+#For Yolo
+ultralytics

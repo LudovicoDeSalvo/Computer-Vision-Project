@@ -63,7 +63,9 @@ def step_generate_labels(args):
     if not GEN_LABELS.exists():
         print("⚠️  generate_yolo_labels.py not found under utils/. Skipping.")
         return
-    cmd = [sys.executable, str(GEN_LABELS)]
+    cmd = [sys.executable, str(GEN_LABELS),
+           "--repo_root", str(REPO_ROOT),
+           ]
     run_step(cmd)
 
 # Calls the cropper
@@ -195,8 +197,8 @@ def step_split_base(args):
         print(f"⚠️  base_splitter.py not found under {UTILS_DIR}, skipping split.")
         return
     
-    source_directory = CCPD_ROOT
-    validation_directory = CCPD_ROOT.parent / (CCPD_ROOT.name + "_base_val")
+    source_directory = CCPD_ROOT / "ccpd_base"
+    validation_directory = CCPD_ROOT / "ccpd_base_val"
 
     print("Splitting base into train/val (10% validation)…")
     cmd = [

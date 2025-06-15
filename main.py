@@ -73,7 +73,9 @@ def step_crop_images(args):
     if not CROP_ALL.exists():
         print("⚠️  crop_all.py not found under utils/. Skipping.")
         return
-    cmd = [sys.executable, str(CROP_ALL)]
+    cmd = [sys.executable, str(CROP_ALL),
+           "--repo_root", str(REPO_ROOT)
+           ]
     run_step(cmd)
 
 # model choice

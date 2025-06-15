@@ -282,9 +282,6 @@ def parse_args():
     return p.parse_args()
 
 
-
-
-
 def main():
     args = parse_args()
     interactive = not args.non_interactive
